@@ -1,0 +1,170 @@
+import websocket
+import json
+import time
+import numpy as np
+import tensorflow as tf
+from collections import deque
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.optimizers import Adam
+
+# =============================================
+# Configuration
+# =============================================
+DERIV_API_TOKEN = "rpbmOQhAx4y7fWC"
+ACCOUNT_ID = "YOUR_ACCOUNT_ID"
+SYMBOL = "R_50"
+LOOKBACK_WINDOW = 60  # Sequence length for LSTM
+PREDICTION_THRESHOLD = 0.65  # Confidence level
+
+# =============================================
+# LSTM Digit Predictor
+# =============================================
+class LSTMPredictor:
+    def __init__(self):
+        self.scaler = MinMaxScaler(feature_range=(0, 1))
+        self.model = self.build_model()
+        self.sequence = deque(maxlen=LOOKBACK_WINDOW)
+        
+    def build_model(self):
+        model = Sequential([
+            LSTM(64, input_shape=(LOOKBACK_WINDOW, 1), return_sequences=True),
+            Dropout(0.3),
+            LSTM(32),
+            Dropout(0.2),
+            Dense(10, activation='softmax')  # 10 possible digits
+        ])
+        model.compile(optimizer=Adam(0.001),
+                     loss='sparse_categorical_crossentropy',
+                     metrics=['accuracy'])
+        return model
+    
+    def preprocess(self, new_digit):
+        self.sequence.append(new_digit)
+        if len(self.sequence) < LOOKBACK_WINDOW:
+            return None
+            
+        scaled = self.scaler.fit_transform(np.array(self.sequence).reshape(-1, 1))
+        return np.array([scaled[-LOOKBACK_WINDOW:]])
+    
+    def predict_digit(self, X):
+        if X is None:
+            return None, 0
+        prediction = self.model.predict(X, verbose=0)[0]
+        return np.argmax(prediction), np.max(prediction)
+
+    def update_model(self, new_digit):
+        if len(self.sequence) >= LOOKBACK_WINDOW + 1:
+            X = self.scaler.transform(np.array(self.sequence[:-1]).reshape(-1, 1))
+            X = X.reshape(1, LOOKBACK_WINDOW, 1)
+            y = np.array([self.sequence[-1]])
+            self.model.train_on_batch(X, y)
+
+# =============================================
+# Enhanced Trading Bot
+# =============================================
+class EnhancedMatchesDiffersBot:
+    def __init__(self):
+        self.ws = websocket.WebSocketApp(
+            "wss://ws.binaryws.com/websockets/v3?app_id=1089",
+            on_open=self.on_open,
+            on_message=self.on_message
+        )
+        self.predictor = LSTMPredictor()
+        self.history = deque(maxlen=500)
+        self.consecutive_wins = 0
+        
+    def on_open(self, ws):
+        auth_msg = {"authorize": DERIV_API_TOKEN}
+        self.ws.send(json.dumps(auth_msg))
+
+    def on_message(self, ws, message):
+        msg = json.loads(message)
+        if msg.get("error"):
+            print(f"Error: {msg['error']['message']}")
+            return
+            
+        if msg.get("msg_type") == "tick":
+            self.process_tick(msg["tick"])
+
+    def process_tick(self, tick):
+        current_digit = int(str(tick["quote"])[-1])
+        self.history.append(current_digit)
+        
+        # Update LSTM model
+        self.predictor.update_model(current_digit)
+        
+        # Generate prediction
+        X = self.predictor.preprocess(current_digit)
+        predicted_digit, confidence = self.predictor.predict_digit(X)
+        
+        if confidence > PREDICTION_THRESHOLD:
+            self.execute_trade(current_digit, predicted_digit, confidence)
+
+    def execute_trade(self, actual, predicted, confidence):
+        contract_type = "matches" if actual == predicted else "differs"
+        
+        # Adaptive position sizing
+        stake = self.calculate_stake(confidence)
+        
+        print(f"🎯 Prediction: {predicted} (Confidence: {confidence:.2%})")
+        print(f"💡 Actual: {actual} → Trading {contract_type.upper()}")
+        
+        contract = {
+            "buy": 1,
+            "parameters": {
+                "amount": stake,
+                "basis": "stake",
+                "contract_type": contract_type.upper(),
+                "currency": "USD",
+                "duration": 5,
+                "duration_unit": "t",
+                "symbol": SYMBOL
+            }
+        }
+        self.ws.send(json.dumps(contract))
+        
+    def calculate_stake(self, confidence):
+        base_stake = 1
+        # Progressive staking based on confidence and performance
+        stake = base_stake * (confidence ** 2) * (1 + self.consecutive_wins/10)
+        return min(stake, 5)  # Max stake $5
+
+    def run(self):
+        print("🧠 LSTM-Enhanced Trading Bot Started")
+        self.ws.run_forever()
+
+# =============================================
+# Initialization & Training
+# =============================================
+def initialize_model(historical_digits):
+    """Pre-train model with historical data"""
+    predictor = LSTMPredictor()
+    sequences = []
+    targets = []
+    
+    for i in range(LOOKBACK_WINDOW, len(historical_digits)):
+        seq = historical_digits[i-LOOKBACK_WINDOW:i]
+        target = historical_digits[i]
+        sequences.append(seq)
+        targets.append(target)
+        
+    X = np.array(sequences).reshape(-1, LOOKBACK_WINDOW, 1)
+    X = predictor.scaler.fit_transform(X.reshape(-1, 1)).reshape(-1, LOOKBACK_WINDOW, 1)
+    y = np.array(targets)
+    
+    predictor.model.fit(X, y, epochs=50, batch_size=32, verbose=1)
+    return predictor
+
+# =============================================
+# Main Execution
+# =============================================
+if __name__ == "__main__":
+    # Load historical data (example)
+    historical_data = np.random.randint(0, 10, 1000)  # Replace with real data
+    
+    # Initialize bot with pre-trained model
+    bot = EnhancedMatchesDiffersBot()
+    bot.predictor = initialize_model(historical_data)
+    bot.run() 
