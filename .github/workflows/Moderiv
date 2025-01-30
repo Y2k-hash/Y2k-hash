@@ -1,0 +1,72 @@
+<strategy>
+  <metadata>
+    <name>LSTM Enhanced Matches/Differs Strategy</name>
+    <description>Combines pattern recognition with risk management</description>
+    <author>Your Name</author>
+    <version>1.0</version>
+  </metadata>
+
+  <global>
+    <input name="duration" type="number" default="5">Contract Duration</input>
+    <input name="stake" type="number" default="1">Base Stake</input>
+    <input name="rr_multiplier" type="number" default="3">Risk Multiplier</input>
+  </global>
+
+  <block type="market_analysis">
+    <condition>
+      <!-- Last Digit Pattern Recognition -->
+      <check type="last_digit_analysis">
+        <period>60</period>
+        <threshold>0.65</threshold>
+      </check>
+    </condition>
+  </block>
+
+  <block type="trade_parameters">
+    <parameter type="stake">
+      <value>@stake</value>
+      <multiplier>
+        <condition type="consecutive_wins" comparator="greater_than" value="3"/>
+        <value>1.5</value>
+      </multiplier>
+    </parameter>
+    
+    <parameter type="duration">
+      <value>@duration</value>
+    </parameter>
+  </block>
+
+  <block type="trading_conditions">
+    <!-- Matches Condition -->
+    <condition type="predicted_match">
+      <confidence_threshold>65</confidence_threshold>
+      <action type="buy">
+        <contract_type>MATCHES</contract_type>
+        <risk_management>
+          <stop_loss>1</stop_loss>
+          <take_profit>@rr_multiplier</take_profit>
+        </risk_management>
+      </action>
+    </condition>
+
+    <!-- Differs Condition -->
+    <condition type="predicted_difference">
+      <confidence_threshold>70</confidence_threshold>
+      <action type="buy">
+        <contract_type>DIFFERS</contract_type>
+        <risk_management>
+          <stop_loss>1</stop_loss>
+          <take_profit>@rr_multiplier</take_profit>
+        </risk_management>
+      </action>
+    </condition>
+  </block>
+
+  <block type="safety_features">
+    <max_consecutive_losses>5</max_consecutive_losses>
+    <daily_loss_limit>50</daily_loss_limit>
+    <profit_protection>
+      <trailing_stop>2</trailing_stop>
+    </profit_protection>
+  </block>
+</strategy>
